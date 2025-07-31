@@ -1,0 +1,33 @@
+1. Upload Front and Back side Images
+    Provide actual height of the user (in cm or ft/inch)
+    Gender selection (Male/Female/Other) Optional
+
+2. Image Validation
+    Image format must be JPG or PNG only.
+    Maximum image size.
+    Orientation Check ( portrait mode (height > width))
+    blurry or low-resolution images
+    Person Detection (Detect exactly one person in the image. using Mediapipe or YOLO)
+    Pose Validation (full standing pose)
+
+    Front / Back Image Validation
+        Front Image: (nose, eyes, etc. mouth must be visible.)
+        Back Image: (Only shoulders, spine, and back landmarks visible (face landmarks not visible).)
+
+    Reject if:
+        More than one person present.
+        Body is cropped or not fully visible.
+        Arms cover torso.
+        Very dark, low-light, or cluttered background.
+        Wrong image (e.g., landscape or side-pose).
+
+3. Measurement Extraction
+
+4. Library or models:
+    Pose Estimation: mediapipe
+    Image Processing: OpenCV
+    Math & Scaling: NumPy
+    Pose Validation: Custom logic + Mediapipe landmarks
+
+https://chatgpt.com/share/687f2d7a-84f4-8012-a6c6-a3ad5d7b8605
+     

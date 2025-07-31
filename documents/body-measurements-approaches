@@ -1,0 +1,40 @@
+1. Open-Source Model (Ollama, LLaVA)
+    I implemented and tested the LLaVA model for validation tasks. However, the results were inconsistent. The model often returned different responses for the same inputs and sometimes produced incorrect or irrelevant results. This lack of reliability makes it unsuitable for production use.
+
+    Challenges:
+        Inconsistent responses for identical inputs.
+        Frequently produces incorrect or irrelevant outputs.
+
+2. Gemini (Gemini Flash 2.0)
+    I integrated the Gemini Flash 2.0 model, a pre-trained solution. It performed well, offering consistent responses, accurate validations, and reliable extraction of body measurements. Among the three approaches, this is currently the most stable and effective.
+
+        High accuracy in body measurement extraction.
+        Consistent and reliable outputs.
+        No need for model training or dataset management.
+
+    Paid on productionn estimated Cost Calculation (Gemini Flash 2.0):
+    Requests/day: 1,000
+    Tokens/request: 1,000
+    Monthly Tokens: 30 million
+    Estimated Monthly Cost: $15.00
+    Based on $0.50 per million input tokens. Actual costs may vary depending on usage and pricing updates. 
+    The cost also depends on the daily request volume, and we may need to upgrade the plan if usage increases.
+
+3. Model Training and fine-tuning
+    This approach involves developing and training a custom model tailored to our specific needs. While it offers full control, it is highly resource-intensive and time-consuming.
+
+    Challenges:
+        Long and complex development and testing cycles.
+        Requires a large, high-quality dataset (minimum 1,000+ records).
+        Demands high-end hardware (GPU, RAM, storage).
+        Need a dedicated server for model training.
+        Difficult to achieve desired accuracy.
+        High development and infrastructure costs.
+
+4. Custom Logic (Own Logic)
+    This approach involves writing custom logic to validate and extract body measurements from the input text. It is a quick and easy solution, but it may not always produce reliable results.
+
+    Challenges:
+        Requires manual intervention to extract body measurements.
+        May not always produce accurate results.
+        Difficult to maintain and update.
