@@ -35,8 +35,6 @@ def calibrate_focal_length(image, real_width_cm, detected_width_px):
     """Dynamically calibrates focal length using a known object."""
     return (detected_width_px * FOCAL_LENGTH) / real_width_cm if detected_width_px else FOCAL_LENGTH
 
-
-
 def detect_reference_object(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
@@ -300,7 +298,6 @@ def calculate_measurements(results, scale_factor, image_width, image_height, dep
     
     measurements["thigh"] = pixel_to_cm(thigh_width_px)
     measurements["thigh_circumference"] = calculate_circumference(thigh_width_px, thigh_depth_ratio)
-
 
     left_ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
     trouser_length_px = abs(left_hip.y * image_height - left_ankle.y * image_height)

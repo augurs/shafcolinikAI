@@ -192,6 +192,7 @@ def validate_image_quality(image: Image.Image) -> Tuple[bool, str]:
     print(f"Mean brightness: {mean_brightness}")
     if mean_brightness < 30:
         return False, "Image is too dark"
+    
     elif mean_brightness > 250:
         return False, "Image is too bright/overexposed"
     
@@ -206,7 +207,7 @@ def validate_image_upload(image_file: UploadFile, image_label: str = "Image") ->
         image_file.file.seek(0, 2)
         size_mb = image_file.file.tell() / (1024 * 1024)
         image_file.file.seek(0)
-
+        
         if size_mb > MAX_IMAGE_SIZE_MB:
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,

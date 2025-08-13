@@ -37,7 +37,7 @@ class BodyMeasurementExtractor:
         return to_cm(chest_width * 2.2)
 
     def _estimate_waist(self, left_shoulder, left_hip, right_hip, to_cm) -> float:
-        print(left_shoulder, left_hip, right_hip, "544444444444444444444")
+        # Use shoulder-to-shoulder distance but adjust for proper chest level
         waist_y = int((left_shoulder[1] + left_hip[1]) / 2)
         waist_left = (left_hip[0], waist_y)
         waist_right = (right_hip[0], waist_y)
@@ -169,6 +169,3 @@ class BodyMeasurementExtractor:
         except Exception as e:
             return {"success": False, "message": f"Error: {str(e)}"}
         
-
-
-

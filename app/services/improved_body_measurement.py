@@ -14,220 +14,117 @@ class ImprovedBodyMeasurementExtractor:
         self.actual_height_cm = actual_height_cm
         self.config = config
         self.pose = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.7)
-        
-        # Store calculated measurement points for consistent drawing
         self.measurement_points = {}
 
     def __del__(self):
         self.pose.close()
 
-    def _get_point(self, landmarks, part, width, height) -> Tuple[int, int]:
+    # ===== Helper functions =====
+    def _get_xyz(self, landmarks, part, width, height):
+        """Return (x, y, z) in image-scaled units."""
         lm = landmarks[mp_pose.PoseLandmark[part].value]
-        return int(lm.x * width), int(lm.y * height)
+        return (lm.x * width, lm.y * height, lm.z * width)  # scale z by width
 
-    def _get_landmark_confidence(self, landmarks, part) -> float:
-        lm = landmarks[mp_pose.PoseLandmark[part].value]
-        return lm.visibility
-
-    def _distance(self, p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
+    def _distance_3d(self, p1, p2):
         return np.linalg.norm(np.array(p1) - np.array(p2))
 
-    def _calculate_body_height_and_scale(self, landmarks, width, height) -> Tuple[float, float]:
-        # Use multiple reference points for better accuracy
-        head_top = self._get_point(landmarks, "NOSE", width, height)[1]
-        
-        # Get feet points with confidence checking
-        left_heel = self._get_point(landmarks, "LEFT_HEEL", width, height)
-        right_heel = self._get_point(landmarks, "RIGHT_HEEL", width, height)
-        left_foot = self._get_point(landmarks, "LEFT_FOOT_INDEX", width, height)
-        right_foot = self._get_point(landmarks, "RIGHT_FOOT_INDEX", width, height)
-        
-        # Use the lowest visible point
-        foot_points = [left_heel[1], right_heel[1], left_foot[1], right_foot[1]]
-        bottom = max(foot_points)
-        
-        pixel_body_height = abs(bottom - head_top)
+    def _get_landmark_confidence(self, landmarks, part):
+        return landmarks[mp_pose.PoseLandmark[part].value].visibility
+
+    # ===== Core calculations =====
+    def _calculate_body_height_and_scale(self, landmarks, width, height):
+        head_top_y = self._get_xyz(landmarks, "NOSE", width, height)[1]
+        feet_points_y = [
+            self._get_xyz(landmarks, "LEFT_HEEL", width, height)[1],
+            self._get_xyz(landmarks, "RIGHT_HEEL", width, height)[1],
+            self._get_xyz(landmarks, "LEFT_FOOT_INDEX", width, height)[1],
+            self._get_xyz(landmarks, "RIGHT_FOOT_INDEX", width, height)[1]
+        ]
+        bottom_y = max(feet_points_y)
+        pixel_body_height = abs(bottom_y - head_top_y)
         cm_per_pixel = self.actual_height_cm / pixel_body_height
-        
-        # Store for drawing
+
         self.measurement_points['height'] = {
-            'start': (self._get_point(landmarks, "NOSE", width, height)),
-            'end': (left_heel[0], bottom),
+            'start': (int(self._get_xyz(landmarks, "NOSE", width, height)[0]), int(head_top_y)),
+            'end': (int(self._get_xyz(landmarks, "LEFT_HEEL", width, height)[0]), int(bottom_y)),
             'measurement': self.actual_height_cm
         }
-        
         return pixel_body_height, cm_per_pixel
 
-    def _calculate_body_angle(self, landmarks, width, height) -> float:
-        """Calculate if the person is standing straight or at an angle"""
-        left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-        right_shoulder = self._get_point(landmarks, "RIGHT_SHOULDER", width, height)
-        left_hip = self._get_point(landmarks, "LEFT_HIP", width, height)
-        right_hip = self._get_point(landmarks, "RIGHT_HIP", width, height)
-        
-        # Calculate the angle of the torso
-        shoulder_center = ((left_shoulder[0] + right_shoulder[0])/2, (left_shoulder[1] + right_shoulder[1])/2)
-        hip_center = ((left_hip[0] + right_hip[0])/2, (left_hip[1] + right_hip[1])/2)
-        
-        angle = math.atan2(hip_center[0] - shoulder_center[0], hip_center[1] - shoulder_center[1])
+    def _calculate_body_angle(self, landmarks, width, height):
+        left_shoulder = self._get_xyz(landmarks, "LEFT_SHOULDER", width, height)
+        right_shoulder = self._get_xyz(landmarks, "RIGHT_SHOULDER", width, height)
+        left_hip = self._get_xyz(landmarks, "LEFT_HIP", width, height)
+        right_hip = self._get_xyz(landmarks, "RIGHT_HIP", width, height)
+        shoulder_center = ((left_shoulder[0] + right_shoulder[0]) / 2,
+                           (left_shoulder[1] + right_shoulder[1]) / 2)
+        hip_center = ((left_hip[0] + right_hip[0]) / 2,
+                      (left_hip[1] + right_hip[1]) / 2)
+        angle = math.atan2(hip_center[0] - shoulder_center[0],
+                           hip_center[1] - shoulder_center[1])
         return abs(math.degrees(angle))
 
-    def _estimate_chest(self, landmarks, width, height, to_cm, body_angle) -> float:
-        """Improved chest calculation using multiple reference points"""
-        left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-        right_shoulder = self._get_point(landmarks, "RIGHT_SHOULDER", width, height)
-        
-        # Get additional chest reference points for better accuracy
-        try:
-            # Use shoulder-to-shoulder distance but adjust for proper chest level
-            shoulder_width = self._distance(left_shoulder, right_shoulder)
-            
-            # For frontal pose, chest width is typically 85-90% of shoulder width
-            # This accounts for the natural tapering from shoulders to chest
-            chest_width_factor = 0.88
-            chest_width = shoulder_width * chest_width_factor
-            
-            # Calculate actual chest measurement points for drawing
-            center_x = (left_shoulder[0] + right_shoulder[0]) / 2
-            # Chest level is typically 15-20% below shoulder line for proper chest measurement
-            chest_y_offset = abs(right_shoulder[1] - left_shoulder[1]) * 0.1 + 35
-            chest_y = max(left_shoulder[1], right_shoulder[1]) + chest_y_offset
-            
-            left_chest = (int(center_x - chest_width/2), int(chest_y))
-            right_chest = (int(center_x + chest_width/2), int(chest_y))
-            
-        except:
-            # Fallback to shoulder width
-            chest_width = self._distance(left_shoulder, right_shoulder) * 0.88
-            left_chest = left_shoulder
-            right_chest = right_shoulder
-        
-        # Conservative angle compensation
-        angle_factor = 1.0 if body_angle < 12 else (1.0 + (body_angle - 12) * 0.005)
-        adjusted_chest_width = chest_width * angle_factor
-        
-        # More accurate multiplier based on real anthropometric data
-        chest_multiplier = 2.6
-        chest_measurement = to_cm(adjusted_chest_width * chest_multiplier)
-        
-        # Store measurement points for drawing
-        self.measurement_points['chest'] = {
-            'start': left_chest,
-            'end': right_chest,
-            'measurement': chest_measurement,
-            'width_pixels': adjusted_chest_width
-        }
-        
-        return chest_measurement
+    def _estimate_chest(self, landmarks, width, height, to_cm, body_angle):
+        left_shoulder = self._get_xyz(landmarks, "LEFT_SHOULDER", width, height)
+        right_shoulder = self._get_xyz(landmarks, "RIGHT_SHOULDER", width, height)
+        shoulder_width = self._distance_3d(left_shoulder, right_shoulder)
+        chest_width = shoulder_width * 0.88  # taper from shoulders to chest
+        angle_factor = 1.0 if body_angle < 8 else (1.0 + (body_angle - 8) * 0.01)
+        adjusted_width = chest_width * angle_factor
+        chest_cm = to_cm(adjusted_width * 2.6)  # multiplier for circumference
 
-    def _estimate_waist(self, landmarks, width, height, to_cm, body_angle) -> float:
-        """Improved waist calculation using anatomical landmarks"""
-        left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-        right_shoulder = self._get_point(landmarks, "RIGHT_SHOULDER", width, height)
-        left_hip = self._get_point(landmarks, "LEFT_HIP", width, height)
-        right_hip = self._get_point(landmarks, "RIGHT_HIP", width, height)
-        
-        # Calculate waist position - natural waist is typically at narrowest point
-        # This is usually about 40-50% down from shoulders to hips for better accuracy
+        # Store for drawing
+        cx = (left_shoulder[0] + right_shoulder[0]) / 2
+        cy = (left_shoulder[1] + right_shoulder[1]) / 2 + 35
+        self.measurement_points['chest'] = {
+            'start': (int(cx - chest_width / 2), int(cy)),
+            'end': (int(cx + chest_width / 2), int(cy)),
+            'measurement': round(chest_cm, 1)
+        }
+        return round(chest_cm, 1)
+
+    def _estimate_waist(self, landmarks, width, height, to_cm, body_angle):
+        left_shoulder = self._get_xyz(landmarks, "LEFT_SHOULDER", width, height)
+        right_shoulder = self._get_xyz(landmarks, "RIGHT_SHOULDER", width, height)
+        left_hip = self._get_xyz(landmarks, "LEFT_HIP", width, height)
+        right_hip = self._get_xyz(landmarks, "RIGHT_HIP", width, height)
         waist_ratio = 0.45
-        
         shoulder_center_y = (left_shoulder[1] + right_shoulder[1]) / 2
         hip_center_y = (left_hip[1] + right_hip[1]) / 2
-        waist_y = int(shoulder_center_y + (hip_center_y - shoulder_center_y) * waist_ratio)
-        
-        # More realistic waist width estimation
-        shoulder_width = abs(right_shoulder[0] - left_shoulder[0])
-        hip_width = abs(right_hip[0] - left_hip[0])
-        
-        # Natural waist is typically 75-85% of shoulder width for most body types
-        # Use a blend approach for better accuracy
+        waist_y = shoulder_center_y + (hip_center_y - shoulder_center_y) * waist_ratio
+        shoulder_width = self._distance_3d(left_shoulder, right_shoulder)
+        hip_width = self._distance_3d(left_hip, right_hip)
         waist_width = (shoulder_width * 0.78 + hip_width * 0.85) / 2
-        
-        # Calculate waist measurement points for drawing
-        center_x = (left_shoulder[0] + right_shoulder[0] + left_hip[0] + right_hip[0]) / 4
-        left_waist = (int(center_x - waist_width/2), waist_y)
-        right_waist = (int(center_x + waist_width/2), waist_y)
-        
-        # Conservative angle compensation
-        angle_factor = 1.0 if body_angle < 12 else (1.0 + (body_angle - 12) * 0.004)
-        adjusted_waist_width = waist_width * angle_factor
-        
-        # Realistic circumference multiplier for waist
-        waist_multiplier = 2.5
-        waist_measurement = to_cm(adjusted_waist_width * waist_multiplier)
-        
-        # Store measurement points for drawing
+        angle_factor = 1.0 if body_angle < 8 else (1.0 + (body_angle - 8) * 0.01)
+        waist_cm = to_cm(waist_width * angle_factor * 2.5)
+
+        cx = (left_shoulder[0] + right_shoulder[0] + left_hip[0] + right_hip[0]) / 4
         self.measurement_points['waist'] = {
-            'start': left_waist,
-            'end': right_waist,
-            'measurement': waist_measurement,
-            'width_pixels': adjusted_waist_width
+            'start': (int(cx - waist_width / 2), int(waist_y)),
+            'end': (int(cx + waist_width / 2), int(waist_y)),
+            'measurement': round(waist_cm, 1)
         }
-        
-        return waist_measurement
+        return round(waist_cm, 1)
 
-    def _estimate_hips(self, landmarks, width, height, to_cm, body_angle) -> float:
-        """Improved hip calculation using multiple reference points"""
-        left_hip = self._get_point(landmarks, "LEFT_HIP", width, height)
-        right_hip = self._get_point(landmarks, "RIGHT_HIP", width, height)
-        
-        # Get shoulder width as reference for proportional calculation
-        left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-        right_shoulder = self._get_point(landmarks, "RIGHT_SHOULDER", width, height)
-        shoulder_width = self._distance(left_shoulder, right_shoulder)
-        
-        # Try to use additional points for better accuracy
-        try:
-            left_knee = self._get_point(landmarks, "LEFT_KNEE", width, height)
-            right_knee = self._get_point(landmarks, "RIGHT_KNEE", width, height)
-            
-            # Hip measurement point should be at the widest part of hips/buttocks
-            # This is typically 15-20% down from hip joint toward knee for better accuracy
-            hip_offset_ratio = 0.18
-            
-            left_hip_measure = (
-                left_hip[0] + (left_knee[0] - left_hip[0]) * hip_offset_ratio,
-                left_hip[1] + (left_knee[1] - left_hip[1]) * hip_offset_ratio
-            )
-            right_hip_measure = (
-                right_hip[0] + (right_knee[0] - right_hip[0]) * hip_offset_ratio,
-                right_hip[1] + (right_knee[1] - right_hip[1]) * hip_offset_ratio
-            )
-            
-            measured_hip_width = self._distance(left_hip_measure, right_hip_measure)
-            
-            # Ensure hips are proportional to shoulder width
-            proportional_hip_width = shoulder_width * 0.90
-            hip_width = max(measured_hip_width, proportional_hip_width)
-            
-            # Use the calculated measurement points for drawing
-            draw_left_hip = left_hip_measure
-            draw_right_hip = right_hip_measure
-            
-        except:
-            # Fallback: use proportional calculation based on shoulder width
-            hip_width = shoulder_width * 0.90
-            draw_left_hip = left_hip
-            draw_right_hip = right_hip
-        
-        # Conservative angle compensation
-        angle_factor = 1.0 if body_angle < 12 else (1.0 + (body_angle - 12) * 0.004)
-        adjusted_hip_width = hip_width * angle_factor
-        
-        # More accurate hip circumference multiplier
-        hip_multiplier = 2.6
-        hip_measurement = to_cm(adjusted_hip_width * hip_multiplier)
-        
-        # Store measurement points for drawing
+    def _estimate_hips(self, landmarks, width, height, to_cm, body_angle):
+        left_hip = self._get_xyz(landmarks, "LEFT_HIP", width, height)
+        right_hip = self._get_xyz(landmarks, "RIGHT_HIP", width, height)
+        shoulder_width = self._distance_3d(
+            self._get_xyz(landmarks, "LEFT_SHOULDER", width, height),
+            self._get_xyz(landmarks, "RIGHT_SHOULDER", width, height)
+        )
+        hip_width = self._distance_3d(left_hip, right_hip)
+        hip_width = max(hip_width, shoulder_width * 0.9)
+        angle_factor = 1.0 if body_angle < 8 else (1.0 + (body_angle - 8) * 0.01)
+        hips_cm = to_cm(hip_width * angle_factor * 2.6)
+
         self.measurement_points['hips'] = {
-            'start': (int(draw_left_hip[0]), int(draw_left_hip[1])),
-            'end': (int(draw_right_hip[0]), int(draw_right_hip[1])),
-            'measurement': hip_measurement,
-            'width_pixels': adjusted_hip_width
+            'start': (int(left_hip[0]), int(left_hip[1])),
+            'end': (int(right_hip[0]), int(right_hip[1])),
+            'measurement': round(hips_cm, 1)
         }
-        
-        return hip_measurement
-
+        return round(hips_cm, 1)
+    
     def _validate_measurements(self, chest_cm, waist_cm, hips_cm) -> Dict[str, float]:
         """Validate and adjust measurements based on realistic body proportions"""
         measurements = {"chest_cm": chest_cm, "waist_cm": waist_cm, "hips_cm": hips_cm}
@@ -264,101 +161,101 @@ class ImprovedBodyMeasurementExtractor:
         return measurements
 
     def _calculate_additional_measurements(self, landmarks, width, height, to_cm) -> Dict[str, float]:
-        """Calculate additional body measurements with improved accuracy"""
+        """Calculate additional body measurements with improved accuracy using XYZ distances."""
         measurements = {}
-        
-        # Inseam (crotch to ankle) - more accurate calculation
+
+        # Inseam (crotch to ankle) with proportion check
         try:
-            left_hip = self._get_point(landmarks, "LEFT_HIP", width, height)
-            right_hip = self._get_point(landmarks, "RIGHT_HIP", width, height)
-            left_ankle = self._get_point(landmarks, "LEFT_ANKLE", width, height)
-            
-            # Crotch point estimation (midpoint between hips, slightly lower)
-            crotch_x = (left_hip[0] + right_hip[0]) / 2
-            crotch_y = max(left_hip[1], right_hip[1]) + abs(left_hip[1] - right_hip[1]) * 0.5
-            crotch = (int(crotch_x), int(crotch_y))
-            
-            inseam_measurement = to_cm(self._distance(crotch, left_ankle))
-            measurements["inseam_cm"] = inseam_measurement
-            
-            # Store for drawing
+            left_hip = self._get_xyz(landmarks, "LEFT_HIP", width, height)
+            right_hip = self._get_xyz(landmarks, "RIGHT_HIP", width, height)
+            left_ankle = self._get_xyz(landmarks, "LEFT_ANKLE", width, height)
+
+            # Crotch midpoint between hips
+            crotch = (
+                (left_hip[0] + right_hip[0]) / 2,
+                (left_hip[1] + right_hip[1]) / 2,
+                (left_hip[2] + right_hip[2]) / 2
+            )
+            raw_inseam_cm = to_cm(self._distance_3d(crotch, left_ankle))
+
+            # Clamp inseam to realistic ratio of total height
+            min_ratio, max_ratio = 0.45, 0.48  # 45–48% of height
+            min_inseam = self.actual_height_cm * min_ratio
+            max_inseam = self.actual_height_cm * max_ratio
+            clamped_inseam = max(min_inseam, min(raw_inseam_cm, max_inseam))
+
+            measurements["inseam_cm"] = round(clamped_inseam, 1)
+
             self.measurement_points['inseam'] = {
-                'start': crotch,
-                'end': left_ankle,
-                'measurement': inseam_measurement
+                'start': (int(crotch[0]), int(crotch[1])),
+                'end': (int(left_ankle[0]), int(left_ankle[1])),
+                'measurement': measurements["inseam_cm"]
             }
-            
         except:
-            # Fallback to hip-ankle distance
-            left_hip = self._get_point(landmarks, "LEFT_HIP", width, height)
-            left_ankle = self._get_point(landmarks, "LEFT_ANKLE", width, height)
-            inseam_measurement = to_cm(self._distance(left_hip, left_ankle) * 0.85)
-            measurements["inseam_cm"] = inseam_measurement
-            
-            # Store for drawing
-            self.measurement_points['inseam'] = {
-                'start': left_hip,
-                'end': left_ankle,
-                'measurement': inseam_measurement
-            }
-        
+            measurements["inseam_cm"] = 0.0
+
+
         # Arm length (shoulder to wrist)
         try:
-            left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-            left_wrist = self._get_point(landmarks, "LEFT_WRIST", width, height)
-            arm_measurement = to_cm(self._distance(left_shoulder, left_wrist))
-            measurements["arm_length_cm"] = arm_measurement
-            
-            # Store for drawing
+            measurements["arm_length_cm"] = round(
+                to_cm(self._distance_3d(
+                    self._get_xyz(landmarks, "LEFT_SHOULDER", width, height),
+                    self._get_xyz(landmarks, "LEFT_WRIST", width, height)
+                )),
+                1
+            )
+
             self.measurement_points['arm'] = {
-                'start': left_shoulder,
-                'end': left_wrist,
-                'measurement': arm_measurement
+                'start': (int(self._get_xyz(landmarks, "LEFT_SHOULDER", width, height)[0]),
+                        int(self._get_xyz(landmarks, "LEFT_SHOULDER", width, height)[1])),
+                'end': (int(self._get_xyz(landmarks, "LEFT_WRIST", width, height)[0]),
+                        int(self._get_xyz(landmarks, "LEFT_WRIST", width, height)[1])),
+                'measurement': measurements["arm_length_cm"]
             }
         except:
             measurements["arm_length_cm"] = 0.0
-        
-        # Thigh circumference (more accurate)
+
+        # Thigh circumference (60% of hip circumference)
         try:
-            left_hip = self._get_point(landmarks, "LEFT_HIP", width, height)
-            left_knee = self._get_point(landmarks, "LEFT_KNEE", width, height)
-            
-            # Thigh measurement is typically at widest part, about 25% down from hip
-            thigh_point_ratio = 0.25
-            thigh_y = int(left_hip[1] + (left_knee[1] - left_hip[1]) * thigh_point_ratio)
-            
-            # Estimate thigh width based on hip width
-            hip_width = self._distance(self._get_point(landmarks, "LEFT_HIP", width, height),
-                                     self._get_point(landmarks, "RIGHT_HIP", width, height))
-            thigh_width = hip_width * 0.35  # Thigh is typically 35% of hip width
-            
-            # Thigh circumference multiplier
-            measurements["thigh_cm"] = to_cm(thigh_width * 2.2)
+            hip_circumference = self.measurement_points.get('hips', {}).get('measurement', 0)
+            if hip_circumference <= 0:
+                hip_width = self._distance_3d(
+                    self._get_xyz(landmarks, "LEFT_HIP", width, height),
+                    self._get_xyz(landmarks, "RIGHT_HIP", width, height)
+                )
+                hip_circumference = to_cm(hip_width * 2.6)  # circumference multiplier
+            measurements["thigh_cm"] = round(hip_circumference * 0.60, 1)
         except:
             measurements["thigh_cm"] = 0.0
-        
-        # Neck circumference (estimated from shoulder width)
+
+        # Neck circumference (38% of chest or fallback to shoulder width)
         try:
-            left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-            right_shoulder = self._get_point(landmarks, "RIGHT_SHOULDER", width, height)
-            shoulder_width = self._distance(left_shoulder, right_shoulder)
-            # Neck is typically 35-40% of shoulder width
-            measurements["neck_cm"] = to_cm(shoulder_width * 0.37 * 2.0)  # circumference
+            chest_circumference = self.measurement_points.get('chest', {}).get('measurement', 0)
+            if chest_circumference > 0:
+                measurements["neck_cm"] = round(chest_circumference * 0.38, 1)
+            else:
+                shoulder_width = self._distance_3d(
+                    self._get_xyz(landmarks, "LEFT_SHOULDER", width, height),
+                    self._get_xyz(landmarks, "RIGHT_SHOULDER", width, height)
+                )
+                measurements["neck_cm"] = round(to_cm(shoulder_width * 0.45), 1)
         except:
             measurements["neck_cm"] = 0.0
-        
-        # Sleeve length (shoulder to elbow + elbow to wrist)
+
+        # Sleeve length (shoulder → elbow → wrist)
         try:
-            left_shoulder = self._get_point(landmarks, "LEFT_SHOULDER", width, height)
-            left_elbow = self._get_point(landmarks, "LEFT_ELBOW", width, height)
-            left_wrist = self._get_point(landmarks, "LEFT_WRIST", width, height)
-            
-            upper_arm = self._distance(left_shoulder, left_elbow)
-            forearm = self._distance(left_elbow, left_wrist)
-            measurements["sleeve_length_cm"] = to_cm(upper_arm + forearm)
+            upper_arm = self._distance_3d(
+                self._get_xyz(landmarks, "LEFT_SHOULDER", width, height),
+                self._get_xyz(landmarks, "LEFT_ELBOW", width, height)
+            )
+            forearm = self._distance_3d(
+                self._get_xyz(landmarks, "LEFT_ELBOW", width, height),
+                self._get_xyz(landmarks, "LEFT_WRIST", width, height)
+            )
+            measurements["sleeve_length_cm"] = round(to_cm(upper_arm + forearm), 1)
         except:
             measurements["sleeve_length_cm"] = measurements.get("arm_length_cm", 0.0)
-        
+
         return measurements
 
     def _calculate_pose_quality(self, landmarks) -> float:
@@ -640,25 +537,4 @@ class ImprovedBodyMeasurementExtractor:
         except Exception as e:
             return {"success": False, "message": f"Error in measurement calculation: {str(e)}"}
 
-
-# Example usage with visualization
-def create_improved_config():
-    return {
-        "visibility_threshold": 0.7,
-        "key_visibility_threshold": 0.8,
-        "weights": {
-            "visible_ratio": 0.25,
-            "pose_quality": 0.35,
-            "body_coverage_pct": 0.25,
-            "body_angle": 0.15
-        },
-        "expected_ratios": {
-            "torso_to_height": 0.35,
-            "chest_to_height": 0.15
-        },
-        "ratio_tolerances": {
-            "torso_weight": 500,
-            "chest_weight": 800
-        }
-    }
 
